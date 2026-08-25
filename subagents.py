@@ -1,62 +1,121 @@
-import time
 from langchain.agents import create_agent
-from langchain_core.tools import tool
-from config import llm
-from tool import lookup_policy
-from logger import system_logger
 
-# Define subagents
+from config import llm
+from tools import search_policy, get_all_policies
+
+
+
+
 triage_agent = create_agent(
     model=llm,
     tools=[],
-    system_prompt="You are a support triage expert. Categorize tickets and assign priority."
+
+    system_prompt="""
+You are the Triage Agent for a customer support system.
+
+Your job is to analyze a customer ticket and determine:
+
+1. The correct category.
+2. Whether the ticket should be flagged for human review.
+3. A short reason for your decision.
+
+Available categories are:
+
+- Returns
+- Billing
+- Technical
+
+Rules:
+
+Returns:
+Use for damaged items, returns, refunds related to returned products,
+or return eligibility.
+
+Billing:
+Use for duplicate charges, payment problems, or billing issues.
+
+Technical:
+Use for device problems, connection problems, setup problems,
+or troubleshooting.
+
+Flag a ticket when:
+
+- The message is unclear.
+- The issue appears high-risk.
+- The request cannot be answered using the available categories.
+- The customer appears to need human assistance.
+
+Return your answer in this exact format:
+
+CATEGORY: <category>
+FLAGGED: <YES or NO>
+REASON: <short explanation>
+"""
 )
+
+
 
 policy_agent = create_agent(
     model=llm,
-    tools=[lookup_policy],
-    system_prompt="You are a customer service policy expert. Use the lookup_policy tool to retrieve answers."
+
+    tools=[
+        search_policy,
+        get_all_policies
+    ],
+
+    system_prompt="""
+You are the Policy Agent for a customer support system.
+
+Your job is to:
+
+1. Read the customer's issue.
+2. Use the policy search tool.
+3. Find the policy that applies to the ticket.
+4. Create a professional customer response based only on
+   the available policy information.
+
+Do not invent policies.
+
+Do not promise something that is not supported by the policy.
+
+Your response should contain:
+
+POLICY: <policy title>
+
+RESPONSE:
+<professional customer response>
+"""
 )
 
-# Wrap subagents into tools with telemetry
-@tool
-def ask_triage_expert(query: str, ticket_id: str = "TICK-101") -> str:
-    """Classifies customer tickets and assigns priority."""
-    start_time = time.time()
-    
-    result = triage_agent.invoke({"messages": [{"role": "user", "content": query}]})
-    output_text = result["messages"][-1].content
-    
-    exec_time = (time.time() - start_time) * 1000
-    
-    system_logger.log_step(
-        step_name="Triage",
-        agent_name="TriageAgent",
-        input_data={"query": query},
-        output_data={"triage_response": output_text},
-        execution_time_ms=exec_time,
-        ticket_id=ticket_id
-    )
-    
-    return output_text
 
-@tool
-def ask_policy_expert(query: str, ticket_id: str = "TICK-101") -> str:
-    """Answers customer support questions using corporate policy docs."""
-    start_time = time.time()
-    
-    result = policy_agent.invoke({"messages": [{"role": "user", "content": query}]})
-    output_text = result["messages"][-1].content
-    
-    exec_time = (time.time() - start_time) * 1000
-    
-    system_logger.log_step(
-        step_name="Policy Lookup",
-        agent_name="PolicyAgent",
-        input_data={"query": query},
-        output_data={"policy_response": output_text},
-        execution_time_ms=exec_time,
-        ticket_id=ticket_id
-    )
-    
-    return output_text
+
+reviewer_agent = create_agent(
+    model=llm,
+    tools=[],
+
+    system_prompt="""
+You are the Reviewer/Critic Agent for a customer support system.
+
+Your job is to review the proposed customer response.
+
+Check:
+
+1. Does the response address the customer's issue?
+2. Does it follow the provided policy?
+3. Did the response invent any information?
+4. Is the response professional?
+5. Is the response safe to send automatically?
+
+Return your answer in this exact format:
+
+DECISION: APPROVED
+
+or
+
+DECISION: REJECTED
+
+REASON: <short explanation>
+
+If rejected, explain what needs to be corrected.
+"""
+)
